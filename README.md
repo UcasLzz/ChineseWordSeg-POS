@@ -40,3 +40,11 @@ There are many parameters you can tune (CRF, dropout rate, embedding dimension, 
 ```
 
 Input files for the training script have to follow the same format than the CoNLL2003 sharing task: each word has to be on a separate line, and there must be an empty line after each sentence. A line must contain at least 2 columns, the first one being the word itself, the last one being the named entity. It does not matter if there are extra columns that contain tags or chunks in between. Tags have to be given in the IOB format (it can be IOB1 or IOB2).
+
+
+## Suggetsed Readings
+Neural Architectures for Named Entity Recognition
+https://aclweb.org/anthology/N16-1030
+
+Bidirectional LSTM-CRF Models for Sequence Tagging
+https://arxiv.org/pdf/1508.01991v1.pdf
