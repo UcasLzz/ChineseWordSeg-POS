@@ -1,233 +1,137 @@
-#!/usr/bin/env python
-
-import os
+#encoding=utf8
+import time
 import numpy as np
-import optparse
-import itertools
-from collections import OrderedDict
-from utils import create_input
-import loader
+import tensorflow as tf
+from tensorflow.contrib import crf
 
-from utils import models_path, evaluate, eval_script, eval_temp
-from loader import word_mapping, char_mapping, tag_mapping
-from loader import update_tag_scheme, prepare_dataset
-from loader import augment_with_pretrained
-from model import Model
+import cws.BiLSTM as modelDef
+from cws.data import Data
 
-# Read parameters from command line
-optparser = optparse.OptionParser()
-optparser.add_option(
-    "-T", "--train", default="",
-    help="Train set location"
-)
-optparser.add_option(
-    "-d", "--dev", default="",
-    help="Dev set location"
-)
-optparser.add_option(
-    "-t", "--test", default="",
-    help="Test set location"
-)
-optparser.add_option(
-    "-s", "--tag_scheme", default="iobes",
-    help="Tagging scheme (IOB or IOBES)"
-)
-optparser.add_option(
-    "-l", "--lower", default="0",
-    type='int', help="Lowercase words (this will not affect character inputs)"
-)
-optparser.add_option(
-    "-z", "--zeros", default="0",
-    type='int', help="Replace digits with 0"
-)
-optparser.add_option(
-    "-c", "--char_dim", default="25",
-    type='int', help="Char embedding dimension"
-)
-optparser.add_option(
-    "-C", "--char_lstm_dim", default="25",
-    type='int', help="Char LSTM hidden layer size"
-)
-optparser.add_option(
-    "-b", "--char_bidirect", default="1",
-    type='int', help="Use a bidirectional LSTM for chars"
-)
-optparser.add_option(
-    "-w", "--word_dim", default="100",
-    type='int', help="Token embedding dimension"
-)
-optparser.add_option(
-    "-W", "--word_lstm_dim", default="100",
-    type='int', help="Token LSTM hidden layer size"
-)
-optparser.add_option(
-    "-B", "--word_bidirect", default="1",
-    type='int', help="Use a bidirectional LSTM for words"
-)
-optparser.add_option(
-    "-p", "--pre_emb", default="",
-    help="Location of pretrained embeddings"
-)
-optparser.add_option(
-    "-A", "--all_emb", default="0",
-    type='int', help="Load all embeddings"
-)
-optparser.add_option(
-    "-a", "--cap_dim", default="0",
-    type='int', help="Capitalization feature dimension (0 to disable)"
-)
-optparser.add_option(
-    "-f", "--crf", default="1",
-    type='int', help="Use CRF (0 to disable)"
-)
-optparser.add_option(
-    "-D", "--dropout", default="0.5",
-    type='float', help="Droupout on the input (0 = no dropout)"
-)
-optparser.add_option(
-    "-L", "--lr_method", default="sgd-lr_.005",
-    help="Learning method (SGD, Adadelta, Adam..)"
-)
-optparser.add_option(
-    "-r", "--reload", default="0",
-    type='int', help="Reload the last saved model"
-)
-opts = optparser.parse_args()[0]
+tf.app.flags.DEFINE_string('dict_path', 'data/your_dict.pkl', 'dict path')
+tf.app.flags.DEFINE_string('train_data', 'data/your_train_data.pkl', 'train data path')
+tf.app.flags.DEFINE_string('ckpt_path', 'checkpoint/cws.finetune.ckpt/', 'checkpoint path')
+tf.app.flags.DEFINE_integer('embed_size', 256, 'embedding size')
+tf.app.flags.DEFINE_integer('hidden_size', 512, 'hidden layer node number')
+tf.app.flags.DEFINE_integer('batch_size', 128, 'batch size')
+tf.app.flags.DEFINE_integer('epoch', 20, 'training epoch')
+tf.app.flags.DEFINE_float('lr', 0.001, 'learning rate')
+tf.app.flags.DEFINE_string('save_path','checkpoint/cws.ckpt/','new model save path')
 
-# Parse parameters
-parameters = OrderedDict()
-parameters['tag_scheme'] = opts.tag_scheme
-parameters['lower'] = opts.lower == 1
-parameters['zeros'] = opts.zeros == 1
-parameters['char_dim'] = opts.char_dim
-parameters['char_lstm_dim'] = opts.char_lstm_dim
-parameters['char_bidirect'] = opts.char_bidirect == 1
-parameters['word_dim'] = opts.word_dim
-parameters['word_lstm_dim'] = opts.word_lstm_dim
-parameters['word_bidirect'] = opts.word_bidirect == 1
-parameters['pre_emb'] = opts.pre_emb
-parameters['all_emb'] = opts.all_emb == 1
-parameters['cap_dim'] = opts.cap_dim
-parameters['crf'] = opts.crf == 1
-parameters['dropout'] = opts.dropout
-parameters['lr_method'] = opts.lr_method
+FLAGS = tf.app.flags.FLAGS
 
-# Check parameters validity
-assert os.path.isfile(opts.train)
-assert os.path.isfile(opts.dev)
-assert os.path.isfile(opts.test)
-assert parameters['char_dim'] > 0 or parameters['word_dim'] > 0
-assert 0. <= parameters['dropout'] < 1.0
-assert parameters['tag_scheme'] in ['iob', 'iobes']
-assert not parameters['all_emb'] or parameters['pre_emb']
-assert not parameters['pre_emb'] or parameters['word_dim'] > 0
-assert not parameters['pre_emb'] or os.path.isfile(parameters['pre_emb'])
+class BiLSTMTrain(object):
+    def __init__(self, data_train=None, data_valid=None, data_test=None, model=None):
+        self.data_train = data_train
+        self.data_valid = data_valid
+        self.data_test = data_test
+        self.model = model
 
-# Check evaluation script / folders
-if not os.path.isfile(eval_script):
-    raise Exception('CoNLL evaluation script not found at "%s"' % eval_script)
-if not os.path.exists(eval_temp):
-    os.makedirs(eval_temp)
-if not os.path.exists(models_path):
-    os.makedirs(models_path)
+    def train(self):
+       
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = True
+        sess = tf.Session(config=config)
+        sess.run(tf.global_variables_initializer())
+       ## finetune ##
+       # ckpt = tf.train.latest_checkpoint(FLAGS.ckpt_path)
+       # saver = tf.train.Saver()
+       # saver.restore(sess, ckpt)
+       # print('-->finetune the ckeckpoint:'+ckpt+'...')
+       ##############
+        max_epoch = 10
+        tr_batch_size = FLAGS.batch_size
+        max_max_epoch = FLAGS.epoch  # Max epoch
+        display_num = 10  # Display 10 pre epoch
+        tr_batch_num = int(self.data_train.y.shape[0] / tr_batch_size)  
+        display_batch = int(tr_batch_num / display_num)  
+        saver = tf.train.Saver(max_to_keep=10)  
+        for epoch in range(max_max_epoch): 
+            _lr = FLAGS.lr
+            if epoch > max_epoch:
+                _lr = 0.0002
+            print('EPOCH %d， lr=%g' % (epoch + 1, _lr))
+            start_time = time.time()
+            _losstotal = 0.0
+            show_loss = 0.0
+            for batch in range(tr_batch_num):  
+                fetches = [self.model.loss, self.model.train_op]
+                X_batch, y_batch = self.data_train.next_batch(tr_batch_size)
 
-# Initialize model
-model = Model(parameters=parameters, models_path=models_path)
-print "Model location: %s" % model.model_path
+                feed_dict = {self.model.X_inputs: X_batch, self.model.y_inputs: y_batch, self.model.lr: _lr,
+                             self.model.batch_size: tr_batch_size,
+                             self.model.keep_prob: 0.5}
+                _loss, _ = sess.run(fetches, feed_dict)  
+                _losstotal += _loss
+                show_loss += _loss
+                if (batch + 1) % display_batch == 0:
+                    valid_acc = self.test_epoch(self.data_valid, sess)  # valid
+                    print('\ttraining loss=%g ;  valid acc= %g ' % (show_loss / display_batch,
+                                                                             valid_acc))
+                    show_loss = 0.0
+            mean_loss = _losstotal / (tr_batch_num + 0.000001)
+            if (epoch + 1) % 1 == 0:  # Save once per epoch
+                save_path = saver.save(sess, self.model.model_save_path+'_plus', global_step=(epoch + 1))
+                print('the save path is ', save_path)
+            print('\ttraining %d, loss=%g ' % (self.data_train.y.shape[0], mean_loss))
+            print('Epoch training %d, loss=%g, speed=%g s/epoch' % (
+                self.data_train.y.shape[0], mean_loss, time.time() - start_time))
 
-# Data parameters
-lower = parameters['lower']
-zeros = parameters['zeros']
-tag_scheme = parameters['tag_scheme']
+        # testing
+        print('**TEST RESULT:')
+        test_acc = self.test_epoch(self.data_test, sess)
+        print('**Test %d, acc=%g' % (self.data_test.y.shape[0], test_acc))
+        sess.close()
 
-# Load sentences
-train_sentences = loader.load_sentences(opts.train, lower, zeros)
-dev_sentences = loader.load_sentences(opts.dev, lower, zeros)
-test_sentences = loader.load_sentences(opts.test, lower, zeros)
+    def test_epoch(self, dataset=None, sess=None):
+        
+        _batch_size = FLAGS.batch_size
+        _y = dataset.y
+        data_size = _y.shape[0]
+        batch_num = int(data_size / _batch_size)  
+        correct_labels = 0
+        total_labels = 0
+        fetches = [self.model.scores, self.model.length, self.model.transition_params]
 
-# Use selected tagging scheme (IOB / IOBES)
-update_tag_scheme(train_sentences, tag_scheme)
-update_tag_scheme(dev_sentences, tag_scheme)
-update_tag_scheme(test_sentences, tag_scheme)
+        for i in range(batch_num):
+            X_batch, y_batch = dataset.next_batch(_batch_size)
+            feed_dict = {self.model.X_inputs: X_batch, self.model.y_inputs: y_batch, self.model.lr: 1e-5,
+                         self.model.batch_size: _batch_size,
+                         self.model.keep_prob: 1.0}
 
-# Create a dictionary / mapping of words
-# If we use pretrained embeddings, we add them to the dictionary.
-if parameters['pre_emb']:
-    dico_words_train = word_mapping(train_sentences, lower)[0]
-    dico_words, word_to_id, id_to_word = augment_with_pretrained(
-        dico_words_train.copy(),
-        parameters['pre_emb'],
-        list(itertools.chain.from_iterable(
-            [[w[0] for w in s] for s in dev_sentences + test_sentences])
-        ) if not parameters['all_emb'] else None
-    )
-else:
-    dico_words, word_to_id, id_to_word = word_mapping(train_sentences, lower)
-    dico_words_train = dico_words
+            test_score, test_length, transition_params = sess.run(fetches=fetches,
+                                                                  feed_dict=feed_dict)
+            #print(test_score)
+            #print(test_length)
 
-# Create a dictionary and a mapping for words / POS tags / tags
-dico_chars, char_to_id, id_to_char = char_mapping(train_sentences)
-dico_tags, tag_to_id, id_to_tag = tag_mapping(train_sentences)
+            for tf_unary_scores_, y_, sequence_length_ in zip(
+                    test_score, y_batch, test_length):
+                tf_unary_scores_ = tf_unary_scores_[:sequence_length_]
+                y_ = y_[:sequence_length_]
+                viterbi_sequence, _ = crf.viterbi_decode(
+                    tf_unary_scores_, transition_params)
+                
+                correct_labels += np.sum(np.equal(viterbi_sequence, y_))
+                total_labels += sequence_length_
 
-# Index data
-train_data = prepare_dataset(
-    train_sentences, word_to_id, char_to_id, tag_to_id, lower
-)
-dev_data = prepare_dataset(
-    dev_sentences, word_to_id, char_to_id, tag_to_id, lower
-)
-test_data = prepare_dataset(
-    test_sentences, word_to_id, char_to_id, tag_to_id, lower
-)
 
-print "%i / %i / %i sentences in train / dev / test." % (
-    len(train_data), len(dev_data), len(test_data))
+        accuracy = correct_labels / float(total_labels)
+        return accuracy
 
-# Save the mappings to disk
-print 'Saving the mappings to disk...'
-model.save_mappings(id_to_word, id_to_char, id_to_tag)
+def main(_):
+    Data_ = Data(dict_path=FLAGS.dict_path, train_data=FLAGS.train_data)
+    print('Corpus loading completed:', FLAGS.train_data)
+    data_train, data_valid, data_test = Data_.builderTrainData() 
+    print('The training set, verification set, and test set split are completed!')
+    model = modelDef.BiLSTMModel(max_len=Data_.max_len,
+                                 vocab_size=Data_.word2id.__len__()+1, 
+                                 class_num= Data_.tag2id.__len__(), 
+                                 model_save_path=FLAGS.save_path, 
+                                 embed_size=FLAGS.embed_size,  
+                                 hs=FLAGS.hidden_size)
+    print('Model definition completed!')
+    train = BiLSTMTrain(data_train, data_valid, data_test, model)
+    train.train()
+    print('Model training completed!')
 
-# Build the model
-f_train, f_eval = model.build(**parameters)
-
-# Reload previous model values
-if opts.reload:
-    print 'Reloading previous model...'
-    model.reload()
-
-#
-# Train network
-#
-singletons = set([word_to_id[k] for k, v
-                  in dico_words_train.items() if v == 1])
-n_epochs = 100  # number of epochs over the training set
-freq_eval = 1000  # evaluate on dev every freq_eval steps
-best_dev = -np.inf
-best_test = -np.inf
-count = 0
-for epoch in xrange(n_epochs):
-    epoch_costs = []
-    print "Starting epoch %i..." % epoch
-    for i, index in enumerate(np.random.permutation(len(train_data))):
-        count += 1
-        input = create_input(train_data[index], parameters, True, singletons)
-        new_cost = f_train(*input)
-        epoch_costs.append(new_cost)
-        if i % 50 == 0 and i > 0 == 0:
-            print "%i, cost average: %f" % (i, np.mean(epoch_costs[-50:]))
-        if count % freq_eval == 0:
-            dev_score = evaluate(parameters, f_eval, dev_sentences,
-                                 dev_data, id_to_tag, dico_tags)
-            test_score = evaluate(parameters, f_eval, test_sentences,
-                                  test_data, id_to_tag, dico_tags)
-            print "Score on dev: %.5f" % dev_score
-            print "Score on test: %.5f" % test_score
-            if dev_score > best_dev:
-                best_dev = dev_score
-                print "New best score on dev."
-                print "Saving model to disk..."
-                model.save()
-            if test_score > best_test:
-                best_test = test_score
-                print "New best score on test."
-    print "Epoch %i done. Average cost: %f" % (epoch, np.mean(epoch_costs))
+if __name__ == '__main__':
+    tf.app.run()
